@@ -1,3 +1,4 @@
+import sys
 import time
 import warnings
 
@@ -117,7 +118,7 @@ class TD3(OffPolicyRLModel):
         policy = self.policy_tf
         # Rescale
         policy_out = unscale_action(self.action_space, self.policy_out)
-        return policy.obs_ph, self.actions_ph, policy_out
+        return policy.obs_ph, self.actions_ph, None, None, None, policy_out
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
@@ -333,7 +334,6 @@ class TD3(OffPolicyRLModel):
 
                 # Only stop training if return value is False, not when it is None. This is for backwards
                 # compatibility with callbacks that have no return statement.
-                callback.update_locals(locals())
                 if callback.on_step() is False:
                     break
 
@@ -346,7 +346,7 @@ class TD3(OffPolicyRLModel):
                     obs_, new_obs_, reward_ = obs, new_obs, reward
 
                 # Store transition in the replay buffer.
-                self.replay_buffer_add(obs_, action, reward_, new_obs_, done, info)
+                self.replay_buffer.add(obs_, action, reward_, new_obs_, float(done))
                 obs = new_obs
                 # Save the unnormalized observation
                 if self._vec_normalize_env is not None:
@@ -364,7 +364,7 @@ class TD3(OffPolicyRLModel):
                     tf_util.total_episode_reward_logger(self.episode_reward, ep_reward,
                                                         ep_done, writer, self.num_timesteps)
 
-                if self.num_timesteps % self.train_freq == 0:
+                if step % self.train_freq == 0:
                     callback.on_rollout_end()
 
                     mb_infos_vals = []
@@ -390,6 +390,7 @@ class TD3(OffPolicyRLModel):
                         infos_values = np.mean(mb_infos_vals, axis=0)
 
                     callback.on_rollout_start()
+
 
                 episode_rewards[-1] += reward_
                 if done:

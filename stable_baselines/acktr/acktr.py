@@ -1,6 +1,7 @@
 import time
 import warnings
 
+import numpy as np
 import tensorflow as tf
 from gym.spaces import Box, Discrete
 
@@ -343,7 +344,7 @@ class ACKTR(ActorCriticRLModel):
                     rollout = self.runner.run(callback)
                     obs, states, returns, masks, actions, values, ep_infos, true_reward = rollout
                 # pytype:enable=bad-unpacking
-                callback.update_locals(locals())
+
                 callback.on_rollout_end()
 
                 # Early stopping due to the callback
@@ -362,6 +363,7 @@ class ACKTR(ActorCriticRLModel):
                                                 true_reward.reshape((self.n_envs, self.n_steps)),
                                                 masks.reshape((self.n_envs, self.n_steps)),
                                                 writer, self.num_timesteps)
+
 
                 if self.verbose >= 1 and (update % log_interval == 0 or update == 1):
                     explained_var = explained_variance(values, returns)

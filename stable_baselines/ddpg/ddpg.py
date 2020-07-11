@@ -308,14 +308,79 @@ class DDPG(OffPolicyRLModel):
         if _init_setup_model:
             self.setup_model()
 
+    ########################################################
+    def convert_episode_to_batch_major(episode):
+        """Converts an episode to have the batch dimension in the major (first)
+        dimension.
+        """
+        episode_batch = {}
+        for key in episode.keys():
+            val = np.array(episode[key]).copy()
+            # make inputs batch-major instead of time-major
+            episode_batch[key] = val.swapaxes(0, 1)
+
+        return episode_batch
+
+    def initDemoBuffer(self, demoDataFile, update_stats=True):
+
+        demoData = np.load(demoDataFile)
+        info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
+        info_values = [np.empty((self.T, self.rollout_batch_size, self.input_dims['info_' + key]), np.float32) for key in info_keys]
+
+        for epsd in range(self.num_demo):
+            obs, acts, goals, achieved_goals = [], [] ,[] ,[]
+            i = 0
+            for transition in range(self.T):
+                obs.append([demoData['obs'][epsd ][transition].get('observation')])
+                acts.append([demoData['acs'][epsd][transition]])
+                goals.append([demoData['obs'][epsd][transition].get('desired_goal')])
+                achieved_goals.append([demoData['obs'][epsd][transition].get('achieved_goal')])
+                for idx, key in enumerate(info_keys):
+                    info_values[idx][transition, i] = demoData['info'][epsd][transition][key]
+
+            obs.append([demoData['obs'][epsd][self.T].get('observation')])
+            achieved_goals.append([demoData['obs'][epsd][self.T].get('achieved_goal')])
+
+            episode = dict(o=obs,
+                           u=acts,
+                           g=goals,
+                           ag=achieved_goals)
+            for key, value in zip(info_keys, info_values):
+                episode['info_{}'.format(key)] = value
+
+            episode = convert_episode_to_batch_major(episode)
+            global demoBuffer
+            demoBuffer.store_episode(episode)
+
+            print("Demo buffer size currently ", demoBuffer.get_current_size())
+
+            if update_stats:
+                # add transitions to normalizer to normalize the demo data as well
+                episode['o_2'] = episode['o'][:, 1:, :]
+                episode['ag_2'] = episode['ag'][:, 1:, :]
+                num_normalizing_transitions = transitions_in_episode_batch(episode)
+                transitions = self.sample_transitions(episode, num_normalizing_transitions)
+
+                o, o_2, g, ag = transitions['o'], transitions['o_2'], transitions['g'], transitions['ag']
+                transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
+                # No need to preprocess the o_2 and g_2 since this is only used for stats
+
+                self.o_stats.update(transitions['o'])
+                self.g_stats.update(transitions['g'])
+
+                self.o_stats.recompute_stats()
+                self.g_stats.recompute_stats()
+            episode.clear()
+
     def _get_pretrain_placeholders(self):
         policy = self.policy_tf
         # Rescale
-        deterministic_action = unscale_action(self.action_space, self.actor_tf)
-        return policy.obs_ph, self.actions, deterministic_action
+        deterministic_action = self.actor_tf * np.abs(self.action_space.low)
+        return policy.obs_ph, self.actions, None, None, None, deterministic_action
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
+            print('setting up ddpg')
 
             assert isinstance(self.action_space, gym.spaces.Box), \
                 "Error: DDPG cannot output a {} action space, only spaces.Box is supported.".format(self.action_space)
@@ -625,7 +690,7 @@ class DDPG(OffPolicyRLModel):
         action = np.clip(action, -1, 1)
         return action, q_value
 
-    def _store_transition(self, obs, action, reward, next_obs, done, info):
+    def _store_transition(self, obs, action, reward, next_obs, done):
         """
         Store a transition in the replay buffer
 
@@ -634,10 +699,9 @@ class DDPG(OffPolicyRLModel):
         :param reward: (float] the reward
         :param next_obs: ([float] or [int]) the current observation
         :param done: (bool) Whether the episode is over
-        :param info: (dict) extra values used to compute reward when using HER
         """
         reward *= self.reward_scale
-        self.replay_buffer_add(obs, action, reward, next_obs, done, info)
+        self.replay_buffer.add(obs, action, reward, next_obs, float(done))
         if self.normalize_observations:
             self.obs_rms.update(np.array([obs]))
 
@@ -830,6 +894,7 @@ class DDPG(OffPolicyRLModel):
             episode_rewards_history = deque(maxlen=100)
             episode_successes = []
 
+
             with self.sess.as_default(), self.graph.as_default():
                 # Prepare everything.
                 self._reset()
@@ -894,7 +959,7 @@ class DDPG(OffPolicyRLModel):
                             new_obs, reward, done, info = self.env.step(unscaled_action)
 
                             self.num_timesteps += 1
-                            callback.update_locals(locals())
+
                             if callback.on_step() is False:
                                 callback.on_training_end()
                                 return self
@@ -916,7 +981,7 @@ class DDPG(OffPolicyRLModel):
                                 # Avoid changing the original ones
                                 obs_, new_obs_, reward_ = obs, new_obs, reward
 
-                            self._store_transition(obs_, action, reward_, new_obs_, done, info)
+                            self._store_transition(obs_, action, reward_, new_obs_, done)
                             obs = new_obs
                             # Save the unnormalized observation
                             if self._vec_normalize_env is not None:
@@ -1000,11 +1065,6 @@ class DDPG(OffPolicyRLModel):
                                     eval_episode_reward = 0.
 
                     mpi_size = MPI.COMM_WORLD.Get_size()
-
-                    # Not enough samples in the replay buffer
-                    if not self.replay_buffer.can_sample(self.batch_size):
-                        continue
-
                     # Log stats.
                     # XXX shouldn't call np.mean on variable length lists
                     duration = time.time() - start_time

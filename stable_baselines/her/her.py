@@ -104,7 +104,8 @@ class HER(BaseRLModel):
         return self.model._get_pretrain_placeholders()
 
     def setup_model(self):
-        pass
+        return self.model.setup_model()
+        #pass
 
     def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="HER",
               reset_num_timesteps=True):

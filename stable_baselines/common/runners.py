@@ -90,7 +90,7 @@ def traj_segment_generator(policy, env, horizon, reward_giver=None, gail=False, 
 
     cur_ep_ret = 0  # return in current episode
     current_it_len = 0  # len of current iteration
-    current_ep_len = 0  # len of current episode
+    current_ep_len = 0 # len of current episode
     cur_ep_true_ret = 0
     ep_true_rets = []
     ep_rets = []  # returns of completed episodes in this segment
@@ -116,7 +116,6 @@ def traj_segment_generator(policy, env, horizon, reward_giver=None, gail=False, 
         # before returning segment [0, T-1] so we get the correct
         # terminal value
         if step > 0 and step % horizon == 0:
-            callback.update_locals(locals())
             callback.on_rollout_end()
             yield {
                     "observations": observations,
@@ -161,7 +160,6 @@ def traj_segment_generator(policy, env, horizon, reward_giver=None, gail=False, 
             true_reward = reward
 
         if callback is not None:
-            callback.update_locals(locals())
             if callback.on_step() is False:
                 # We have to return everything so pytype does not complain
                 yield {

@@ -19,6 +19,7 @@ from stable_baselines.common.runners import traj_segment_generator
 from stable_baselines.trpo_mpi.utils import add_vtarg_and_adv
 
 
+
 class PPO1(ActorCriticRLModel):
     """
     Proximal Policy Optimization algorithm (MPI version).

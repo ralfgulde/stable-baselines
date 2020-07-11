@@ -1,3 +1,4 @@
+import sys
 import time
 import warnings
 
@@ -126,8 +127,74 @@ class SAC(OffPolicyRLModel):
     def _get_pretrain_placeholders(self):
         policy = self.policy_tf
         # Rescale
-        deterministic_action = unscale_action(self.action_space, self.deterministic_action)
-        return policy.obs_ph, self.actions_ph, deterministic_action
+        deterministic_action = self.deterministic_action * np.abs(self.action_space.low)
+        return policy.obs_ph, self.actions_ph, None, None, None, deterministic_action
+
+
+    ########################################################
+    def convert_episode_to_batch_major(episode):
+        """Converts an episode to have the batch dimension in the major (first)
+        dimension.
+        """
+        episode_batch = {}
+        for key in episode.keys():
+            val = np.array(episode[key]).copy()
+            # make inputs batch-major instead of time-major
+            episode_batch[key] = val.swapaxes(0, 1)
+
+        return episode_batch
+
+    def initDemoBuffer(self, demoDataFile, update_stats=True):
+
+        demoData = np.load(demoDataFile)
+        info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
+        info_values = [np.empty((self.T, self.rollout_batch_size, self.input_dims['info_' + key]), np.float32) for key in info_keys]
+
+        for epsd in range(self.num_demo):
+            obs, acts, goals, achieved_goals = [], [] ,[] ,[]
+            i = 0
+            for transition in range(self.T):
+                obs.append([demoData['obs'][epsd ][transition].get('observation')])
+                acts.append([demoData['acs'][epsd][transition]])
+                goals.append([demoData['obs'][epsd][transition].get('desired_goal')])
+                achieved_goals.append([demoData['obs'][epsd][transition].get('achieved_goal')])
+                for idx, key in enumerate(info_keys):
+                    info_values[idx][transition, i] = demoData['info'][epsd][transition][key]
+
+            obs.append([demoData['obs'][epsd][self.T].get('observation')])
+            achieved_goals.append([demoData['obs'][epsd][self.T].get('achieved_goal')])
+
+            episode = dict(o=obs,
+                           u=acts,
+                           g=goals,
+                           ag=achieved_goals)
+            for key, value in zip(info_keys, info_values):
+                episode['info_{}'.format(key)] = value
+
+            episode = convert_episode_to_batch_major(episode)
+
+            self.demo_buffer = ReplayBuffer(self.buffer_size)
+            self.demo_buffer.store_episode(episode)
+
+            #print("Demo buffer size currently ", demo_buffer.get_current_size())
+
+            if update_stats:
+                # add transitions to normalizer to normalize the demo data as well
+                episode['o_2'] = episode['o'][:, 1:, :]
+                episode['ag_2'] = episode['ag'][:, 1:, :]
+                num_normalizing_transitions = transitions_in_episode_batch(episode)
+                transitions = self.sample_transitions(episode, num_normalizing_transitions)
+
+                o, o_2, g, ag = transitions['o'], transitions['o_2'], transitions['g'], transitions['ag']
+                transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
+                # No need to preprocess the o_2 and g_2 since this is only used for stats
+
+                self.o_stats.update(transitions['o'])
+                self.g_stats.update(transitions['g'])
+
+                self.o_stats.recompute_stats()
+                self.g_stats.recompute_stats()
+            episode.clear()
 
     def setup_model(self):
         with SetVerbosity(self.verbose):
@@ -413,7 +480,6 @@ class SAC(OffPolicyRLModel):
 
                 # Only stop training if return value is False, not when it is None. This is for backwards
                 # compatibility with callbacks that have no return statement.
-                callback.update_locals(locals())
                 if callback.on_step() is False:
                     break
 
@@ -426,7 +492,7 @@ class SAC(OffPolicyRLModel):
                     obs_, new_obs_, reward_ = obs, new_obs, reward
 
                 # Store transition in the replay buffer.
-                self.replay_buffer_add(obs_, action, reward_, new_obs_, done, info)
+                self.replay_buffer.add(obs_, action, reward_, new_obs_, float(done))
                 obs = new_obs
                 # Save the unnormalized observation
                 if self._vec_normalize_env is not None:
@@ -444,7 +510,7 @@ class SAC(OffPolicyRLModel):
                     tf_util.total_episode_reward_logger(self.episode_reward, ep_reward,
                                                         ep_done, writer, self.num_timesteps)
 
-                if self.num_timesteps % self.train_freq == 0:
+                if step % self.train_freq == 0:
                     callback.on_rollout_end()
 
                     mb_infos_vals = []
@@ -529,7 +595,7 @@ class SAC(OffPolicyRLModel):
         observation = observation.reshape((-1,) + self.observation_space.shape)
         actions = self.policy_tf.step(observation, deterministic=deterministic)
         actions = actions.reshape((-1,) + self.action_space.shape)  # reshape to the correct action shape
-        actions = unscale_action(self.action_space, actions)  # scale the output for the prediction
+        actions = unscale_action(self.action_space, actions) # scale the output for the prediction
 
         if not vectorized_env:
             actions = actions[0]

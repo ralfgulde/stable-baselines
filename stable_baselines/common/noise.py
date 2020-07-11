@@ -1,5 +1,3 @@
-from abc import ABC, abstractmethod
-
 import numpy as np
 
 
@@ -11,7 +9,6 @@ class AdaptiveParamNoiseSpec(object):
     :param desired_action_stddev: (float) the desired value for the standard deviation of the noise
     :param adoption_coefficient: (float) the update coefficient for the standard deviation of the noise
     """
-
     def __init__(self, initial_stddev=0.1, desired_action_stddev=0.1, adoption_coefficient=1.01):
         self.initial_stddev = initial_stddev
         self.desired_action_stddev = desired_action_stddev
@@ -45,23 +42,15 @@ class AdaptiveParamNoiseSpec(object):
         return fmt.format(self.initial_stddev, self.desired_action_stddev, self.adoption_coefficient)
 
 
-class ActionNoise(ABC):
+class ActionNoise(object):
     """
     The action noise base class
     """
-
-    def __init__(self):
-        super(ActionNoise, self).__init__()
-
-    def reset(self) -> None:
+    def reset(self):
         """
         call end of episode reset for the noise
         """
         pass
-
-    @abstractmethod
-    def __call__(self) -> np.ndarray:
-        raise NotImplementedError()
 
 
 class NormalActionNoise(ActionNoise):
@@ -71,16 +60,14 @@ class NormalActionNoise(ActionNoise):
     :param mean: (float) the mean value of the noise
     :param sigma: (float) the scale of the noise (std here)
     """
-
     def __init__(self, mean, sigma):
-        super().__init__()
         self._mu = mean
         self._sigma = sigma
 
-    def __call__(self) -> np.ndarray:
+    def __call__(self):
         return np.random.normal(self._mu, self._sigma)
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return 'NormalActionNoise(mu={}, sigma={})'.format(self._mu, self._sigma)
 
 
@@ -98,7 +85,6 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
     """
 
     def __init__(self, mean, sigma, theta=.15, dt=1e-2, initial_noise=None):
-        super().__init__()
         self._theta = theta
         self._mu = mean
         self._sigma = sigma
@@ -107,17 +93,17 @@ class OrnsteinUhlenbeckActionNoise(ActionNoise):
         self.noise_prev = None
         self.reset()
 
-    def __call__(self) -> np.ndarray:
+    def __call__(self):
         noise = self.noise_prev + self._theta * (self._mu - self.noise_prev) * self._dt + \
                 self._sigma * np.sqrt(self._dt) * np.random.normal(size=self._mu.shape)
         self.noise_prev = noise
         return noise
 
-    def reset(self) -> None:
+    def reset(self):
         """
         reset the Ornstein Uhlenbeck noise, to the initial position
         """
         self.noise_prev = self.initial_noise if self.initial_noise is not None else np.zeros_like(self._mu)
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return 'OrnsteinUhlenbeckActionNoise(mu={}, sigma={})'.format(self._mu, self._sigma)

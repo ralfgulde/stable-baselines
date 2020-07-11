@@ -1,8 +1,6 @@
 from collections import OrderedDict
-from typing import Sequence
-from copy import deepcopy
-
 import numpy as np
+from typing import Sequence
 
 from stable_baselines.common.vec_env.base_vec_env import VecEnv
 from stable_baselines.common.vec_env.util import copy_obs_dict, dict_to_obs, obs_space_info
@@ -48,7 +46,7 @@ class DummyVecEnv(VecEnv):
                 obs = self.envs[env_idx].reset()
             self._save_obs(env_idx, obs)
         return (self._obs_from_buf(), np.copy(self.buf_rews), np.copy(self.buf_dones),
-                deepcopy(self.buf_infos))
+                self.buf_infos.copy())
 
     def seed(self, seed=None):
         seeds = list()
@@ -66,10 +64,10 @@ class DummyVecEnv(VecEnv):
         for env in self.envs:
             env.close()
 
-    def get_images(self) -> Sequence[np.ndarray]:
-        return [env.render(mode='rgb_array') for env in self.envs]
+    def get_images(self, *args, **kwargs) -> Sequence[np.ndarray]:
+        return [env.render(*args, mode='rgb_array', **kwargs) for env in self.envs]
 
-    def render(self, mode: str = 'human'):
+    def render(self, *args, **kwargs):
         """
         Gym environment rendering. If there are multiple environments then
         they are tiled together in one image via `BaseVecEnv.render()`.
@@ -82,9 +80,9 @@ class DummyVecEnv(VecEnv):
         :param mode: The rendering type.
         """
         if self.num_envs == 1:
-            return self.envs[0].render(mode=mode)
+            return self.envs[0].render(*args, **kwargs)
         else:
-            return super().render(mode=mode)
+            return super().render(*args, **kwargs)
 
     def _save_obs(self, env_idx, obs):
         for key in self.keys:
