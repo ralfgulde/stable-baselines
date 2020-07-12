@@ -150,6 +150,36 @@ class SAC(OffPolicyRLModel):
         """
         shape = episode_batch['u'].shape
         return shape[0] * shape[1]
+    
+    def fill_expert_buffer(self, num_trajectories=200, max_expert_steps=300):
+
+
+
+        buffer_size = int(1e6)
+        self.demo_buffer = ReplayBuffer(buffer_size)
+
+        obs = self.env.env.reset()
+        print(obs)
+        i = 0
+
+        last_obs = None
+        env_steps = 0
+
+        while i < num_trajectories:
+            a = self.env.env.expert(obs)
+
+            last_obs = deepcopy(obs)
+            obs, reward, done, info = self.env.env.step(a)
+            env_steps += 1
+            if last_obs is not None:
+                self.demo_buffer.add(last_obs['observation'], a, reward, obs['observation'], done)
+
+            if info['is_success'] or env_steps > max_expert_steps:
+                env_steps = 0
+                last_obs = None
+                obs = self.env.env.reset()
+                i += 1
+
 
 
     def initDemoBuffer(self, demoDataFile, update_stats=True):
@@ -469,13 +499,29 @@ class SAC(OffPolicyRLModel):
         return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
 
     def learn(self, total_timesteps, callback=None,
-              log_interval=4, tb_log_name="SAC", reset_num_timesteps=True, replay_wrapper=None):
+              log_interval=4, tb_log_name="SAC_LR_CYCLED", reset_num_timesteps=True, replay_wrapper=None):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
 
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
+        
+        def cyclic_lr(step, num_cycle_steps=10000, base_lr=2.5e-4, max_lr=2e-2):
+            mod_step = step % num_cycle_steps
+            half = num_cycle_steps / 2
+            mod_step_half = mod_step % half
+            pct = mod_step_half / half
+
+            if mod_step < half:
+                diff = max_lr - base_lr
+                diff = pct * diff
+                return base_lr + diff
+            else:
+                diff = max_lr - base_lr
+                diff = pct * diff
+                return max_lr - diff
+            
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -573,8 +619,9 @@ class SAC(OffPolicyRLModel):
                             break
                         n_updates += 1
                         # Compute current learning_rate
-                        frac = 1.0 - step / total_timesteps
-                        current_lr = self.learning_rate(frac)
+                        # frac = 1.0 - step / total_timesteps
+                        # current_lr = self.learning_rate(frac)
+                        current_lr = cyclic_lr(step)
                         # Update policy and critics (q functions)
                         mb_infos_vals.append(self._train_step(step, writer, current_lr))
                         # Update target network
@@ -692,7 +739,7 @@ class SAC(OffPolicyRLModel):
     def samplelicous(self, batch_size, env):
         #print('lets get it doe')
         #print('batch_size: ' + str(batch_size))
-        self.demo_batch_size = 16
+        self.demo_batch_size = 32
         batch = []
         if True:
             # batch = self.replay_buffer.sample(batch_size - self.demo_batch_size, env=env)
