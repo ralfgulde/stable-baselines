@@ -151,14 +151,12 @@ class SAC(OffPolicyRLModel):
         shape = episode_batch['u'].shape
         return shape[0] * shape[1]
     
-    def fill_expert_buffer(self, num_trajectories=200, max_expert_steps=300):
-
-
+    def fill_expert_buffer(self, num_trajectories=500, max_expert_steps=300):
 
         buffer_size = int(1e6)
         self.demo_buffer = ReplayBuffer(buffer_size)
 
-        obs = self.env.env.reset()
+        obs = self.env.reset()
         print(obs)
         i = 0
 
@@ -166,18 +164,18 @@ class SAC(OffPolicyRLModel):
         env_steps = 0
 
         while i < num_trajectories:
-            a = self.env.env.expert(obs)
+            a = self.env.env.expert(self.env.convert_obs_to_dict(obs))
 
             last_obs = deepcopy(obs)
-            obs, reward, done, info = self.env.env.step(a)
+            obs, reward, done, info = self.env.step(a)
             env_steps += 1
             if last_obs is not None:
-                self.demo_buffer.add(last_obs['observation'], a, reward, obs['observation'], done)
+                self.demo_buffer.add(last_obs, a, reward, obs, done)
 
             if info['is_success'] or env_steps > max_expert_steps:
                 env_steps = 0
                 last_obs = None
-                obs = self.env.env.reset()
+                obs = self.env.reset()
                 i += 1
 
 
