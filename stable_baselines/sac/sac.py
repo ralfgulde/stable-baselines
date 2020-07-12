@@ -121,6 +121,7 @@ class SAC(OffPolicyRLModel):
         self.processed_obs_ph = None
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
+        self.pretrained = False
 
         if _init_setup_model:
             self.setup_model()
@@ -152,6 +153,7 @@ class SAC(OffPolicyRLModel):
         return shape[0] * shape[1]
     
     def fill_expert_buffer(self, num_trajectories=500, max_expert_steps=300):
+        self.pretrained = True
 
         buffer_size = int(1e6)
         self.demo_buffer = ReplayBuffer(buffer_size)
@@ -459,7 +461,10 @@ class SAC(OffPolicyRLModel):
 
     def _train_step(self, step, writer, learning_rate):
         # Sample a batch from the replay buffer
-        batch = self.samplelicous(self.batch_size, env=self._vec_normalize_env)
+        if self.pretrained:
+            batch = self.samplelicous(self.batch_size, env=self._vec_normalize_env)
+        else:
+            batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
         feed_dict = {
@@ -496,7 +501,7 @@ class SAC(OffPolicyRLModel):
         return policy_loss, qf1_loss, qf2_loss, value_loss, entropy
 
     def learn(self, total_timesteps, callback=None,
-              log_interval=4, tb_log_name="SAC_LR_CYCLED", reset_num_timesteps=True, replay_wrapper=None):
+              log_interval=4, tb_log_name="SAC_LR_CYCLED", reset_num_timesteps=True, replay_wrapper=None, lr_cycler=False):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
@@ -504,7 +509,7 @@ class SAC(OffPolicyRLModel):
         if replay_wrapper is not None:
             self.replay_buffer = replay_wrapper(self.replay_buffer)
         
-        def cyclic_lr(step, num_cycle_steps=10000, base_lr=2.5e-4, max_lr=2e-2):
+        def cyclic_lr(step, num_cycle_steps=10000, base_lr=5e-4, max_lr=1e-2):
             mod_step = step % num_cycle_steps
             half = num_cycle_steps / 2
             mod_step_half = mod_step % half
@@ -616,9 +621,11 @@ class SAC(OffPolicyRLModel):
                             break
                         n_updates += 1
                         # Compute current learning_rate
-                        # frac = 1.0 - step / total_timesteps
-                        # current_lr = self.learning_rate(frac)
-                        current_lr = cyclic_lr(step)
+                        if lr_cycler:
+                            current_lr = cyclic_lr(step)
+                        else:
+                            frac = 1.0 - step / total_timesteps
+                            current_lr = self.learning_rate(frac)
                         # Update policy and critics (q functions)
                         mb_infos_vals.append(self._train_step(step, writer, current_lr))
                         # Update target network
