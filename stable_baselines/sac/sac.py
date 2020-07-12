@@ -12,7 +12,8 @@ from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.buffers import ReplayBuffer
 from stable_baselines.sac.policies import SACPolicy
 from stable_baselines import logger
-
+from baselines_utils.normalizer import Normalizer
+from copy import deepcopy
 
 class SAC(OffPolicyRLModel):
     """
@@ -132,7 +133,7 @@ class SAC(OffPolicyRLModel):
 
 
     ########################################################
-    def convert_episode_to_batch_major(episode):
+    def convert_episode_to_batch_major(self, episode):
         """Converts an episode to have the batch dimension in the major (first)
         dimension.
         """
@@ -144,25 +145,74 @@ class SAC(OffPolicyRLModel):
 
         return episode_batch
 
+    def transitions_in_episode_batch(self, episode_batch):
+        """Number of transitions in a given episode batch.
+        """
+        shape = episode_batch['u'].shape
+        return shape[0] * shape[1]
+
+
     def initDemoBuffer(self, demoDataFile, update_stats=True):
 
-        demoData = np.load(demoDataFile)
-        info_keys = [key.replace('info_', '') for key in self.input_dims.keys() if key.startswith('info_')]
-        info_values = [np.empty((self.T, self.rollout_batch_size, self.input_dims['info_' + key]), np.float32) for key in info_keys]
+        #setupz dims
+        '''
+        env = self.env
+        env.reset()
+        obs, _, _, info = env.step(env.action_space.sample())
 
-        for epsd in range(self.num_demo):
-            obs, acts, goals, achieved_goals = [], [] ,[] ,[]
+        dims = {
+            'o': obs['observation'].shape[0],
+            'u': env.action_space.shape[0],
+            'g': obs['desired_goal'].shape[0],
+        }
+        
+        dims ={'o': 25, 'u': 4, 'g': 3}
+
+        for key, value in info.items():
+            value = np.array(value)
+            if value.ndim == 0:
+                value = value.reshape(1)
+            dims['info_{}'.format(key)] = value.shape[0]
+        '''
+
+        input_dims ={'o': 25, 'u': 4, 'g': 3}
+        buffer_size = int(1E6)
+        self.demo_buffer = ReplayBuffer(buffer_size)
+        update_stats = True
+
+        T = 50 #max_episode steps
+        rollout_batch_size = 1
+        
+        demoData = np.load(demoDataFile, allow_pickle=True)
+        info_keys = [key.replace('info_', '') for key in input_dims.keys() if key.startswith('info_')]
+        info_values = [np.empty((T, rollout_batch_size, input_dims['info_' + key]), np.float32) for key in info_keys]
+
+        num_demo = np.shape(demoData['obs'])[0]
+
+        #num_demo = 3
+
+        print('===================================================')
+
+        for epsd in range(num_demo):
+            print('Filling the demonstration buffer: (' + str(epsd) + "/" + str(num_demo)+")")
+            cat_obs, obs, acts, goals, achieved_goals = [], [] ,[] ,[], []
             i = 0
-            for transition in range(self.T):
+            for transition in range(T):
                 obs.append([demoData['obs'][epsd ][transition].get('observation')])
                 acts.append([demoData['acs'][epsd][transition]])
                 goals.append([demoData['obs'][epsd][transition].get('desired_goal')])
                 achieved_goals.append([demoData['obs'][epsd][transition].get('achieved_goal')])
+
+                cat_obs.append(np.concatenate(obs[-1] + achieved_goals[-1] + goals[-1]))
                 for idx, key in enumerate(info_keys):
                     info_values[idx][transition, i] = demoData['info'][epsd][transition][key]
 
-            obs.append([demoData['obs'][epsd][self.T].get('observation')])
-            achieved_goals.append([demoData['obs'][epsd][self.T].get('achieved_goal')])
+                if transition > 0:
+                    # def add(self, obs_t, action, reward, obs_tp1, done):
+                    self.demo_buffer.add(cat_obs[transition-1], acts[transition-1], 1.0, cat_obs[transition], 1.0)
+
+            obs.append([demoData['obs'][epsd][T].get('observation')])
+            achieved_goals.append([demoData['obs'][epsd][T].get('achieved_goal')])
 
             episode = dict(o=obs,
                            u=acts,
@@ -171,20 +221,20 @@ class SAC(OffPolicyRLModel):
             for key, value in zip(info_keys, info_values):
                 episode['info_{}'.format(key)] = value
 
-            episode = convert_episode_to_batch_major(episode)
+            episode = self.convert_episode_to_batch_major(episode)
 
-            self.demo_buffer = ReplayBuffer(self.buffer_size)
-            self.demo_buffer.store_episode(episode)
+            #demo_buffer = ReplayBuffer(buffer_size)
+            #self.demo_buffer.store_episode(episode)
+            #self.demo_buffer.add(obs_t, action, reward, obs_tp1, done)
 
-            #print("Demo buffer size currently ", demo_buffer.get_current_size())
-
+            update_stats = False 
             if update_stats:
                 # add transitions to normalizer to normalize the demo data as well
                 episode['o_2'] = episode['o'][:, 1:, :]
                 episode['ag_2'] = episode['ag'][:, 1:, :]
-                num_normalizing_transitions = transitions_in_episode_batch(episode)
+                num_normalizing_transitions = self.transitions_in_episode_batch(episode)
                 transitions = self.sample_transitions(episode, num_normalizing_transitions)
-
+                
                 o, o_2, g, ag = transitions['o'], transitions['o_2'], transitions['g'], transitions['ag']
                 transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
                 # No need to preprocess the o_2 and g_2 since this is only used for stats
@@ -382,7 +432,7 @@ class SAC(OffPolicyRLModel):
 
     def _train_step(self, step, writer, learning_rate):
         # Sample a batch from the replay buffer
-        batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
+        batch = self.samplelicous(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones = batch
 
         feed_dict = {
@@ -637,3 +687,41 @@ class SAC(OffPolicyRLModel):
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
+
+
+    def samplelicous(self, batch_size, env):
+        #print('lets get it doe')
+        #print('batch_size: ' + str(batch_size))
+        self.demo_batch_size = 16
+        batch = []
+        if True:
+            # batch = self.replay_buffer.sample(batch_size - self.demo_batch_size, env=env)
+
+            transitions = self.replay_buffer.sample(batch_size - self.demo_batch_size, env=env)
+            
+            transitionsDemo = self.demo_buffer.sample(self.demo_batch_size, env=env)
+
+            #import pickle
+            #pickle.dump( transitions, open( "transitions.p", "wb" ) )
+            #pickle.dump( transitionsDemo, open( "transitionsDemo.p", "wb" ) )
+            #hyb_transitions = transitions.copy()
+            
+            hyb_obs = np.concatenate((transitions[0], transitionsDemo[0]))
+            hyb_acts = np.concatenate((transitions[1], (np.array(transitionsDemo[1])).reshape(self.demo_batch_size,4)))
+            hyb_rews = np.concatenate((transitions[2], transitionsDemo[2]))
+            hyb_obs_next = np.concatenate((transitions[3], transitionsDemo[3]))
+            hyb_dones = np.concatenate((transitions[4], transitionsDemo[4]))
+            transitions = deepcopy((hyb_obs, hyb_acts, hyb_rews, hyb_obs_next, hyb_dones))
+
+        else:
+            transitions = self.replay_buffer.sample(batch_size, env=env)
+
+        '''
+        o, o_2, g = transitions['o'], transitions['o_2'], transitions['g']
+        ag, ag_2 = transitions['ag'], transitions['ag_2']
+        transitions['o'], transitions['g'] = self._preprocess_og(o, ag, g)
+        transitions['o_2'], transitions['g_2'] = self._preprocess_og(o_2, ag_2, g)
+
+        transitions_batch = [transitions[key] for key in self.stage_shapes.keys()]
+        '''
+        return transitions
