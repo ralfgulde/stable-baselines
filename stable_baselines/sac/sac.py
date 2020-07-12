@@ -157,7 +157,6 @@ class SAC(OffPolicyRLModel):
         self.demo_buffer = ReplayBuffer(buffer_size)
 
         obs = self.env.reset()
-        print(obs)
         i = 0
 
         last_obs = None
