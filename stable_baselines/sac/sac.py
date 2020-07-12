@@ -12,7 +12,6 @@ from stable_baselines.common.schedules import get_schedule_fn
 from stable_baselines.common.buffers import ReplayBuffer
 from stable_baselines.sac.policies import SACPolicy
 from stable_baselines import logger
-from baselines_utils.normalizer import Normalizer
 from copy import deepcopy
 
 class SAC(OffPolicyRLModel):
