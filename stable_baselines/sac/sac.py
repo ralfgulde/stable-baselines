@@ -707,7 +707,7 @@ class SAC(OffPolicyRLModel):
             #hyb_transitions = transitions.copy()
             
             hyb_obs = np.concatenate((transitions[0], transitionsDemo[0]))
-            hyb_acts = np.concatenate((transitions[1], (np.array(transitionsDemo[1])).reshape(self.demo_batch_size,4)))
+            hyb_acts = np.concatenate((transitions[1], (np.array(transitionsDemo[1])).reshape(self.demo_batch_size,*self.env.action_space.shape)))
             hyb_rews = np.concatenate((transitions[2], transitionsDemo[2]))
             hyb_obs_next = np.concatenate((transitions[3], transitionsDemo[3]))
             hyb_dones = np.concatenate((transitions[4], transitionsDemo[4]))
