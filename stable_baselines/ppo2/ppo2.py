@@ -52,7 +52,7 @@ class PPO2(ActorCriticRLModel):
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
-                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None):
+                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, cycling=False):
 
         self.learning_rate = learning_rate
         self.cliprange = cliprange
@@ -67,6 +67,7 @@ class PPO2(ActorCriticRLModel):
         self.noptepochs = noptepochs
         self.tensorboard_log = tensorboard_log
         self.full_tensorboard_log = full_tensorboard_log
+        self.lr_cycle = cycling
 
         self.action_ph = None
         self.advs_ph = None
@@ -299,8 +300,8 @@ class PPO2(ActorCriticRLModel):
 
         return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
 
-    def learn(self, total_timesteps, callback=None, log_interval=1, tb_log_name="PPO2",
-              reset_num_timesteps=True):
+    def learn(self, total_timesteps, callback=None, log_interval=1, tb_log_name="PPO2_LR_CYCLED",
+              reset_num_timesteps=True, lr_cycler=False):
         # Transform to callable if needed
         self.learning_rate = get_schedule_fn(self.learning_rate)
         self.cliprange = get_schedule_fn(self.cliprange)
@@ -308,6 +309,21 @@ class PPO2(ActorCriticRLModel):
 
         new_tb_log = self._init_num_timesteps(reset_num_timesteps)
         callback = self._init_callback(callback)
+
+        def cyclic_lr(step, num_cycle_steps=10000, base_lr=5e-4, max_lr=1e-2):
+            mod_step = step % num_cycle_steps
+            half = num_cycle_steps / 2
+            mod_step_half = mod_step % half
+            pct = mod_step_half / half
+
+            if mod_step < half:
+                diff = max_lr - base_lr
+                diff = pct * diff
+                return base_lr + diff
+            else:
+                diff = max_lr - base_lr
+                diff = pct * diff
+                return max_lr - diff
 
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name, new_tb_log) \
                 as writer:
@@ -326,8 +342,14 @@ class PPO2(ActorCriticRLModel):
                                                                )
                 batch_size = self.n_batch // self.nminibatches
                 t_start = time.time()
-                frac = 1.0 - (update - 1.0) / n_updates
-                lr_now = self.learning_rate(frac)
+
+                # Compute current learning_rate
+                if lr_cycler:
+                    lr_now = cyclic_lr(update)
+                else:
+                    frac = 1.0 - (update - 1.0) / n_updates
+                    lr_now = self.learning_rate(frac)
+
                 cliprange_now = self.cliprange(frac)
                 cliprange_vf_now = cliprange_vf(frac)
 
