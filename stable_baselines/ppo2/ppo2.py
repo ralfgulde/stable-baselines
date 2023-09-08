@@ -3,6 +3,8 @@ import time
 import gym
 import numpy as np
 import tensorflow as tf
+import logging
+tf.get_logger().setLevel(logging.ERROR)
 
 from stable_baselines import logger
 from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_util, SetVerbosity, TensorboardWriter
@@ -52,7 +54,7 @@ class PPO2(ActorCriticRLModel):
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
-                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, cycling=False):
+                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, cycling=False, lr_decay=False, osc_lr=False):
 
         self.learning_rate = learning_rate
         self.cliprange = cliprange
@@ -68,6 +70,8 @@ class PPO2(ActorCriticRLModel):
         self.tensorboard_log = tensorboard_log
         self.full_tensorboard_log = full_tensorboard_log
         self.lr_cycler = cycling
+        self.lr_decay = lr_decay
+        self.osc_lr = osc_lr
 
         self.action_ph = None
         self.advs_ph = None
@@ -278,12 +282,25 @@ class PPO2(ActorCriticRLModel):
                 diff = pct * diff
                 return max_lr - diff
 
+        def get_osc_lr(index, osc_lr):
+            array = np.asarray(osc_lr[0])
+            idx = (np.abs(array - index)).argmin()
+            return osc_lr[1][idx]
+
         if self.lr_cycler:
-        
-            learning_rate = cyclic_lr(update, self.lr_cycler[0], self.lr_cycler[1], self.lr_cycler[2])
-            #print('##########################')
-            #print("cycling: ", learning_rate, ", update: (",update, "/", self.lr_cycler[0],"), cyc: ", self.lr_cycler)
-            #print('##########################')
+            
+            #calc decay
+            if(self.lr_decay):
+                #k = update // self.lr_cycler[0]
+                #learning_rate = cyclic_lr(update, self.lr_cycler[0], self.lr_cycler[1]* pow(.9,k), self.lr_cycler[2]* pow(.99,k))
+                learning_rate = get_osc_lr(update, self.osc_lr)
+            else:
+                #calc learning rate
+                learning_rate = cyclic_lr(update, self.lr_cycler[0], self.lr_cycler[1], self.lr_cycler[2])
+
+            print('##########################')
+            print("cycling: ", learning_rate, ", update: (",update, "/", self.lr_cycler[0],"), cyc: ", self.lr_cycler)
+            print('##########################')
 
         advs = returns - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
