@@ -54,7 +54,7 @@ class PPO2(ActorCriticRLModel):
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
-                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, cycling=False, lr_decay=False, osc_lr=False):
+                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, cycling=False, osc_lr=None, lr_mode=None):
 
         self.learning_rate = learning_rate
         self.cliprange = cliprange
@@ -70,8 +70,8 @@ class PPO2(ActorCriticRLModel):
         self.tensorboard_log = tensorboard_log
         self.full_tensorboard_log = full_tensorboard_log
         self.lr_cycler = cycling
-        self.lr_decay = lr_decay
         self.osc_lr = osc_lr
+        self.lr_mode = lr_mode
 
         self.action_ph = None
         self.advs_ph = None
@@ -287,20 +287,10 @@ class PPO2(ActorCriticRLModel):
             idx = (np.abs(array - index)).argmin()
             return osc_lr[1][idx]
 
-        if self.lr_cycler:
-            
-            #calc decay
-            if(self.lr_decay):
-                #k = update // self.lr_cycler[0]
-                #learning_rate = cyclic_lr(update, self.lr_cycler[0], self.lr_cycler[1]* pow(.9,k), self.lr_cycler[2]* pow(.99,k))
-                learning_rate = get_osc_lr(update, self.osc_lr)
-            else:
-                #calc learning rate
-                learning_rate = cyclic_lr(update, self.lr_cycler[0], self.lr_cycler[1], self.lr_cycler[2])
-
-            print('##########################')
-            print("cycling: ", learning_rate, ", update: (",update, "/", self.lr_cycler[0],"), cyc: ", self.lr_cycler)
-            print('##########################')
+        if self.lr_mode == 'cyc':
+            learning_rate = cyclic_lr(update, self.lr_cycler[0], self.lr_cycler[1], self.lr_cycler[2])
+        elif self.lr_mode == 'osc': 
+            learning_rate = get_osc_lr(update, self.osc_lr)
 
         advs = returns - values
         advs = (advs - advs.mean()) / (advs.std() + 1e-8)
